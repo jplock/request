@@ -27,6 +27,7 @@ var http = require('http')
   , uuid = require('node-uuid')
   , mime = require('mime')
   , tunnel = require('tunnel-agent')
+  , safeStringify = require('json-stringify-safe')
 
   , ForeverAgent = require('forever-agent')
   , FormData = require('form-data')
@@ -35,10 +36,6 @@ var http = require('http')
   , CookieJar = Cookie.Jar
   , cookieJar = new CookieJar
   ;
-  
-if (process.logging) {
-  var log = process.logging('request')
-}
 
 try {
   https = require('https')
@@ -456,7 +453,6 @@ Request.prototype._updateProtocol = function () {
     if (self.agent) self.agent = self.getAgent()
 
   } else {
-    if (log) log('previously https, now http')
     // previously was doing https, now doing http
     // stop any tunneling.
     if (self.tunnel) self.tunnel = false
@@ -556,7 +552,6 @@ Request.prototype.start = function () {
   self._started = true
   self.method = self.method || 'GET'
   self.href = self.uri.href
-  if (log) log('%method %href', self)
 
   if (self.src && self.src.stat && self.src.stat.size && !self.headers['content-length'] && !self.headers['Content-Length']) {
     self.headers['content-length'] = self.src.stat.size
@@ -712,7 +707,6 @@ Request.prototype.start = function () {
         delete self.headers['content-type']
         delete self.headers['content-length']
       }
-      if (log) log('Redirect to %uri due to status %status', {uri: self.uri, status: response.statusCode})
       self.init()
       return // Ignore the rest of the response
     } else {
@@ -921,11 +915,11 @@ Request.prototype.json = function (val) {
   if (typeof val === 'boolean') {
     if (typeof this.body === 'object') {
       this.setHeader('content-type', 'application/json')
-      this.body = JSON.stringify(this.body)
+      this.body = safeStringify(this.body)
     }
   } else {
     this.setHeader('content-type', 'application/json')
-    this.body = JSON.stringify(val)
+    this.body = safeStringify(val)
   }
   return this
 }
@@ -983,14 +977,7 @@ Request.prototype.aws = function (opts, now) {
 }
 
 Request.prototype.hawk = function (opts) {
-  var creds = {key:opts.key, id:opts.id, algorithm:opts.algorithm}
-  delete opts.key
-  delete opts.id
-  delete opts.algorithm
-  
-  var port = this.uri.port || (this.uri.protocol === 'https:' ? 443 : 80)
-  
-  this.headers.Authorization = hawk.getAuthorizationHeader(creds, this.method, this.uri.path, this.uri.hostname, parseInt(port), opts)
+  this.headers.Authorization = hawk.getAuthorizationHeader(this.uri, this.method, opts)
 }
 
 Request.prototype.oauth = function (_oauth) {
