@@ -18,7 +18,8 @@ var http = require('http')
   , url = require('url')
   , util = require('util')
   , stream = require('stream')
-  , qs = require('querystring')
+  , qs = require('qs')
+  , querystring = require('querystring')
   , crypto = require('crypto')
   
   , oauth = require('oauth-sign')
@@ -44,6 +45,15 @@ try {
 try {
   tls = require('tls')
 } catch (e) {}
+
+var debug
+if (/\brequest\b/.test(process.env.NODE_DEBUG)) {
+  debug = function() {
+    console.error('REQUEST %s', util.format.apply(util, arguments))
+  }
+} else {
+  debug = function() {}
+}
 
 function toBase64 (str) {
   return (new Buffer(str || "", "ascii")).toString("base64")
@@ -118,7 +128,7 @@ Request.prototype.init = function (options) {
   
   self.method = options.method || 'GET'
   
-  if (request.debug) console.error('REQUEST', options)
+  debug(options)
   if (!self.pool && self.pool !== false) self.pool = globalPool
   self.dests = self.dests || []
   self.__isRequestRequest = true
@@ -284,11 +294,11 @@ Request.prototype.init = function (options) {
   }
 
   if (self.uri.auth && !self.headers.authorization) {
-    var authPieces = self.uri.auth.split(':').map(function(item){ return qs.unescape(item) })
+    var authPieces = self.uri.auth.split(':').map(function(item){ return querystring.unescape(item) })
     self.auth(authPieces[0], authPieces[1], true)
   }
   if (self.proxy && self.proxy.auth && !self.headers['proxy-authorization'] && !self.tunnel) {
-    self.headers['proxy-authorization'] = "Basic " + toBase64(self.proxy.auth.split(':').map(function(item){ return qs.unescape(item)}).join(':'))
+    self.headers['proxy-authorization'] = "Basic " + toBase64(self.proxy.auth.split(':').map(function(item){ return querystring.unescape(item)}).join(':'))
   }
 
   
@@ -343,6 +353,10 @@ Request.prototype.init = function (options) {
     } else {
       self.agentClass = self.httpModule.Agent
     }
+  }
+  
+  if (self.strictSSL === false) {
+    self.rejectUnauthorized = false
   }
 
   if (self.pool === false) {
@@ -486,8 +500,7 @@ Request.prototype.getAgent = function () {
     }
   }
   if (this.ca) options.ca = this.ca
-  if (typeof this.rejectUnauthorized !== 'undefined')
-    options.rejectUnauthorized = this.rejectUnauthorized;
+  if (typeof this.rejectUnauthorized !== 'undefined') options.rejectUnauthorized = this.rejectUnauthorized
 
   if (this.cert && this.key) {
     options.key = this.key
@@ -565,6 +578,7 @@ Request.prototype.start = function () {
   var reqOptions = copy(self)
   delete reqOptions.auth
 
+  debug('make request', self.uri.href)
   self.req = self.httpModule.request(reqOptions, self.onResponse.bind(self))
 
   if (self.timeout && !self.timeoutTimer) {
@@ -600,20 +614,31 @@ Request.prototype.start = function () {
 }
 Request.prototype.onResponse = function (response) {
   var self = this
+  debug('onResponse', self.uri.href, response.statusCode, response.headers)
+  response.on('end', function() {
+    debug('response end', self.uri.href, response.statusCode, response.headers)
+  });
   
   if (response.connection.listeners('error').indexOf(self._parserErrorHandler) === -1) {
     response.connection.once('error', self._parserErrorHandler)
   }
-  if (self._aborted) return
+  if (self._aborted) {
+    debug('aborted', self.uri.href)
+    response.resume()
+    return
+  }
   if (self._paused) response.pause()
+  else response.resume()
 
   self.response = response
   response.request = self
   response.toJSON = toJSON
 
+  // XXX This is different on 0.10, because SSL is strict by default
   if (self.httpModule === https &&
       self.strictSSL &&
       !response.client.authorized) {
+    debug('strict ssl error', self.uri.href)
     var sslErr = response.client.authorizationError
     self.emit('error', new Error('SSL Error: '+ sslErr))
     return
@@ -623,7 +648,7 @@ Request.prototype.onResponse = function (response) {
   if (self.timeout && self.timeoutTimer) {
     clearTimeout(self.timeoutTimer)
     self.timeoutTimer = null
-  }  
+  }
 
   var addCookie = function (cookie) {
     if (self._jar) self._jar.add(new Cookie(cookie))
@@ -637,6 +662,8 @@ Request.prototype.onResponse = function (response) {
 
   var redirectTo = null
   if (response.statusCode >= 300 && response.statusCode < 400 && response.headers.location) {
+    debug('redirect', response.headers.location)
+
     if (self.followAllRedirects) {
       redirectTo = response.headers.location
     } else if (self.followRedirect) {
@@ -655,6 +682,8 @@ Request.prototype.onResponse = function (response) {
   } else if (response.statusCode == 401 && self._hasAuth && !self._sentAuth) {
     var authHeader = response.headers['www-authenticate']
     var authVerb = authHeader && authHeader.split(' ')[0]
+    debug('reauth', authVerb)
+
     switch (authVerb) {
       case 'Basic':
         self.auth(self._user, self._pass, true)
@@ -704,6 +733,12 @@ Request.prototype.onResponse = function (response) {
   }
 
   if (redirectTo) {
+    debug('redirect to', redirectTo)
+
+    // ignore any potential response body.  it cannot possibly be useful
+    // to us at this point.
+    if (self._paused) response.resume()
+
     if (self._redirectsFollowed >= self.maxRedirects) {
       self.emit('error', new Error("Exceeded maxRedirects. Probably stuck in a redirect loop "+self.uri.href))
       return
@@ -784,9 +819,14 @@ Request.prototype.onResponse = function (response) {
         bodyLen += chunk.length
       })
       self.on("end", function () {
-        if (self._aborted) return
-          
+        debug('end event', self.uri.href)
+        if (self._aborted) {
+          debug('aborted', self.uri.href)
+          return
+        }
+
         if (buffer.length && Buffer.isBuffer(buffer[0])) {
+          debug('has body', self.uri.href, bodyLen)
           var body = new Buffer(bodyLen)
           var i = 0
           buffer.forEach(function (chunk) {
@@ -812,11 +852,12 @@ Request.prototype.onResponse = function (response) {
             response.body = JSON.parse(response.body)
           } catch (e) {}
         }
-          
+        debug('emitting complete', self.uri.href)
         self.emit('complete', response, response.body)
       })
     }
   }
+  debug('finish init function', self.uri.href)
 }
 
 Request.prototype.abort = function () {
@@ -922,15 +963,21 @@ Request.prototype.multipart = function (multipart) {
   return self
 }
 Request.prototype.json = function (val) {
-  this.setHeader('accept', 'application/json')
+  var self = this;
+  var setAcceptHeader = function() {
+  	if (!self.headers['accept'] && !self.headers['Accept']) {
+			  self.setHeader('accept', 'application/json')
+		}
+	}
+  setAcceptHeader();
   this._json = true
   if (typeof val === 'boolean') {
     if (typeof this.body === 'object') {
-      this.setHeader('content-type', 'application/json')
+      setAcceptHeader();
       this.body = safeStringify(this.body)
     }
   } else {
-    this.setHeader('content-type', 'application/json')
+    setAcceptHeader();
     this.body = safeStringify(val)
   }
   return this

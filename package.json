@@ -7,7 +7,7 @@
     "util",
     "utility"
   ],
-  "version": "2.14.1",
+  "version": "2.16.3",
   "author": "Mikeal Rogers <mikeal.rogers@gmail.com>",
   "repository": {
     "type": "git",
@@ -17,7 +17,7 @@
     "url": "http://github.com/mikeal/request/issues"
   },
   "engines": [
-    "node >= 0.3.6"
+    "node >= 0.8.0"
   ],
   "main": "index.js",
   "dependencies": {
@@ -30,7 +30,8 @@
     "oauth-sign": "~0.2.0",
     "forever-agent": "~0.2.0",
     "tunnel-agent": "~0.2.0",
-    "json-stringify-safe": "~3.0.0"
+    "json-stringify-safe": "~3.0.0",
+    "qs": "~0.5.4"
   },
   "scripts": {
     "test": "node tests/run.js"
