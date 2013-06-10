@@ -151,7 +151,7 @@ Request.prototype.init = function (options) {
     self.on('complete', self.callback.bind(self, null))
   }
 
-  if (self.url) {
+  if (self.url && !self.uri) {
     // People use this property instead all the time so why not just support it.
     self.uri = self.url
     delete self.url
@@ -551,9 +551,19 @@ Request.prototype.getAgent = function () {
 
     if (options.cert)
       poolKey += options.cert.toString('ascii') + options.key.toString('ascii')
+
+    if (options.ciphers) {
+      if (poolKey) poolKey += ':'
+      poolKey += options.ciphers
+    }
+
+    if (options.secureOptions) {
+      if (poolKey) poolKey += ':'
+      poolKey += options.secureOptions
+    }
   }
 
-  if (!poolKey && Agent === this.httpModule.Agent && this.httpModule.globalAgent) {
+  if (!poolKey && Object.keys(options).length === 0 && this.httpModule.globalAgent) {
     // not doing anything special.  Use the globalAgent
     return this.httpModule.globalAgent
   }
