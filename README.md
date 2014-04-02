@@ -81,6 +81,18 @@ http.createServer(function (req, resp) {
 
 You can still use intermediate proxies, the requests will still follow HTTP forwards, etc.
 
+## UNIX Socket 
+
+`request` supports the `unix://` protocol for all requests. The path is assumed to be absolute to the root of the host file system. 
+
+HTTP paths are extracted from the supplied URL by testing each level of the full URL against net.connect for a socket response.
+
+Thus the following request will GET `/httppath` from the HTTP server listening on `/tmp/unix.socket`
+
+```javascript
+request.get('unix://tmp/unix.socket/httppath')
+```
+
 ## Forms
 
 `request` supports `application/x-www-form-urlencoded` and `multipart/form-data` form uploads. For `multipart/related` refer to the `multipart` API.
@@ -96,12 +108,20 @@ request.post('http://service.com/upload').form({key:'value'})
 For `multipart/form-data` we use the [form-data](https://github.com/felixge/node-form-data) library by [@felixge](https://github.com/felixge). You don’t need to worry about piping the form object or setting the headers, `request` will handle that for you.
 
 ```javascript
-var r = request.post('http://service.com/upload')
+var r = request.post('http://service.com/upload', function optionalCallback (err, httpResponse, body) {
+  if (err) {
+    return console.error('upload failed:', err);
+  }
+  console.log('Upload successful!  Server responded with:', body);
+})
 var form = r.form()
 form.append('my_field', 'my_value')
 form.append('my_buffer', new Buffer([1, 2, 3]))
 form.append('my_file', fs.createReadStream(path.join(__dirname, 'doodle.png'))
 form.append('remote_file', request('http://google.com/doodle.png'))
+
+// Just like always, `r` is a writable stream, and can be used as such (you have until nextTick to pipe it, etc.)
+// Alternatively, you can provide a callback (that's what this example does-- see `optionalCallback` above).
 ```
 
 ## HTTP Authentication
@@ -118,7 +138,7 @@ request.get('http://some.server.com/', {
 });
 ```
 
-If passed as an option, `auth` should be a hash containing values `user` || `username`, `password` || `pass`, and `sendImmediately` (optional).  The method form takes parameters `auth(username, password, sendImmediately)`.
+If passed as an option, `auth` should be a hash containing values `user` || `username`, `pass` || `password`, and `sendImmediately` (optional).  The method form takes parameters `auth(username, password, sendImmediately)`.
 
 `sendImmediately` defaults to `true`, which causes a basic authentication header to be sent.  If `sendImmediately` is `false`, then `request` will retry with a proper authentication header after receiving a `401` response from the server (which must contain a `WWW-Authenticate` header indicating the required authentication method).
 
@@ -158,7 +178,7 @@ request.post({url:url, oauth:oauth}, function (e, r, body) {
         , token: perm_token.oauth_token
         , token_secret: perm_token.oauth_token_secret
         }
-      , url = 'https://api.twitter.com/1/users/show.json?'
+      , url = 'https://api.twitter.com/1.1/users/show.json?'
       , params =
         { screen_name: perm_token.screen_name
         , user_id: perm_token.user_id
@@ -172,7 +192,33 @@ request.post({url:url, oauth:oauth}, function (e, r, body) {
 })
 ```
 
+### Custom HTTP Headers
 
+HTTP Headers, such as `User-Agent`, can be set in the `options` object.
+In the example below, we call the github API to find out the number
+of stars and forks for the request repository. This requires a
+custom `User-Agent` header as well as https.
+
+```javascript
+var request = require('request');
+
+var options = {
+	url: 'https://api.github.com/repos/mikeal/request',
+	headers: {
+		'User-Agent': 'request'
+	}
+};
+
+function callback(error, response, body) {
+	if (!error && response.statusCode == 200) {
+		var info = JSON.parse(body);
+		console.log(info.stargazers_count + " Stars");
+		console.log(info.forks_count + " Forks");
+	}
+}
+
+request(options, callback);
+```
 
 ### request(options, callback)
 
@@ -184,7 +230,7 @@ The first argument can be either a `url` or an `options` object. The only requir
 * `headers` - http headers (default: `{}`)
 * `body` - entity body for PATCH, POST and PUT requests. Must be a `Buffer` or `String`.
 * `form` - when passed an object, this sets `body` to a querystring representation of value, and adds `Content-type: application/x-www-form-urlencoded; charset=utf-8` header. When passed no options, a `FormData` instance is returned (and is piped to request).
-* `auth` - A hash containing values `user` || `username`, `password` || `pass`, and `sendImmediately` (optional).  See documentation above.
+* `auth` - A hash containing values `user` || `username`, `pass` || `password`, and `sendImmediately` (optional).  See documentation above.
 * `json` - sets `body` but to JSON representation of value and adds `Content-type: application/json` header.  Additionally, parses the response body as JSON.
 * `multipart` - (experimental) array of objects which contains their own headers and `body` attribute. Sends `multipart/related` request. See example below.
 * `followRedirect` - follow HTTP 3xx responses as redirects (default: `true`)
@@ -206,9 +252,9 @@ The first argument can be either a `url` or an `options` object. The only requir
 
 The callback argument gets 3 arguments: 
 
-1. An `error` when applicable (usually from the `http.Client` option, not the `http.ClientRequest` object)
-2.An `http.ClientResponse` object
-3. The third is the `response` body (`String` or `Buffer`)
+1. An `error` when applicable (usually from [`http.ClientRequest`](http://nodejs.org/api/http.html#http_class_http_clientrequest) object)
+2. An [`http.IncomingMessage`](http://nodejs.org/api/http.html#http_http_incomingmessage) object
+3. The third is the `response` body (`String` or `Buffer`, or JSON object if the `json` option is supplied)
 
 ## Convenience methods
 
@@ -326,12 +372,13 @@ request('http://www.google.com', function () {
   request('http://images.google.com')
 })
 ```
+
 OR
 
 ```javascript
 var j = request.jar()
 var cookie = request.cookie('your_cookie_here')
-j.add(cookie)
+j.setCookie(cookie, uri);
 request({url: 'http://www.google.com', jar: j}, function () {
   request('http://images.google.com')
 })
